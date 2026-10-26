@@ -7,8 +7,6 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-# Upstream scripts don't check dotnet exit codes; a failed publish must not ship a half-built zip.
-$PSNativeCommandUseErrorActionPreference = $true
 
 # The patches leave the tree dirty; upstream's build scripts refuse that without this opt-out.
 $env:CR_SKIP_GIT_CHECK = '1'
@@ -39,6 +37,21 @@ finally {
 $zip = Get-ChildItem -Path (Join-Path $SourceDir 'Releases') -Recurse -File -Filter $assetName | Select-Object -First 1
 if ($null -eq $zip) {
     throw "Build did not produce the expected asset '$assetName'."
+}
+
+# Upstream ignores native exit codes (its localization audit always fails), so verify the publish output exists instead.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archive = [System.IO.Compression.ZipFile]::OpenRead($zip.FullName)
+try {
+    $entryNames = @($archive.Entries | ForEach-Object { $_.Name })
+}
+finally {
+    $archive.Dispose()
+}
+foreach ($required in 'Crystal Relay.exe', 'CrystalRelayUpdater.exe') {
+    if ($entryNames -notcontains $required) {
+        throw "Package '$assetName' is missing '$required'; the publish step likely failed."
+    }
 }
 
 # Script stdout also carries dotnet build output, so the path goes through the Actions output file instead.
