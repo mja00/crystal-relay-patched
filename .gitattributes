@@ -1,0 +1,2 @@
+# Upstream source is LF; Windows checkout must not convert the patches to CRLF.
+*.patch -text
