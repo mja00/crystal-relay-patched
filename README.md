@@ -16,7 +16,7 @@ From then on, the in-app updater pulls from this repo, not upstream, so updates 
 
 ## How it works
 
-`.github/workflows/sync.yml` runs every 6 hours. For each of upstream's 5 newest releases that isn't mirrored here yet, it:
+`.github/workflows/sync.yml` runs every 6 hours. If upstream's latest release isn't mirrored here yet, it:
 
 1. Clones upstream at that release tag.
 2. Applies `patches/*.patch` with a 3-way merge (`scripts/Apply-Patches.ps1`).

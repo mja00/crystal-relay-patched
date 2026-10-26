@@ -34,9 +34,13 @@ jobs:
           if [ -n "${INPUT_TAG:-}" ]; then
             tags=$(jq -nc --arg tag "$INPUT_TAG" '[$tag]')
           else
-            upstream=$(gh release list -R "$UPSTREAM_REPO" -L 5 --exclude-drafts --json tagName -q '.[].tagName' | sort)
-            ours=$(gh release list -R "$GITHUB_REPOSITORY" -L 100 --json tagName -q '.[].tagName' | sort)
-            tags=$(comm -23 <(echo "$upstream") <(echo "$ours") | sort -V | jq -Rnc '[inputs | select(length > 0)]')
+            # Only upstream's latest: older tags built later would take GitHub's "Latest" badge.
+            latest=$(gh release view -R "$UPSTREAM_REPO" --json tagName -q .tagName)
+            if gh release view "$latest" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+              tags='[]'
+            else
+              tags=$(jq -nc --arg tag "$latest" '[$tag]')
+            fi
           fi
           echo "Tags to build: $tags"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
