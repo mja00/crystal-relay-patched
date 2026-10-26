@@ -1,0 +1,119 @@
+name: Sync upstream releases
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Upstream tag to (re)build, e.g. v3.2.0-bugfix8. Empty builds any missing recent releases.
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: seluvia/crystal-relay-public
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.plan.outputs.tags }}
+    steps:
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG:-}" ]; then
+            tags=$(jq -nc --arg tag "$INPUT_TAG" '[$tag]')
+          else
+            upstream=$(gh release list -R "$UPSTREAM_REPO" -L 5 --exclude-drafts --json tagName -q '.[].tagName' | sort)
+            ours=$(gh release list -R "$GITHUB_REPOSITORY" -L 100 --json tagName -q '.[].tagName' | sort)
+            tags=$(comm -23 <(echo "$upstream") <(echo "$ours") | sort -V | jq -Rnc '[inputs | select(length > 0)]')
+          fi
+          echo "Tags to build: $tags"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.tags != '[]'
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        tag: ${{ fromJson(needs.plan.outputs.tags) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ matrix.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # Patches are LF; Windows git would otherwise check out CRLF and every hunk would fail.
+      - name: Fetch upstream source
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          git clone --config core.autocrlf=false "https://github.com/$env:UPSTREAM_REPO.git" upstream
+          git -C upstream checkout --detach "refs/tags/$env:TAG"
+
+      - name: Apply patches
+        shell: pwsh
+        run: ./scripts/Apply-Patches.ps1 -SourceDir upstream -UpdateRepo $env:GITHUB_REPOSITORY
+
+      - name: Test patched dev command authorization
+        shell: pwsh
+        run: >-
+          dotnet test upstream/VrcTwitchOscBridge.Tests/VrcTwitchOscBridge.Tests.csproj
+          -c Release --nologo
+          --filter "FullyQualifiedName~DevChatCommandParserTests"
+
+      - name: Build package
+        id: package
+        shell: pwsh
+        run: ./scripts/Build-Package.ps1 -SourceDir upstream -Tag $env:TAG
+
+      - name: Publish release
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $upstream = gh release view $env:TAG -R $env:UPSTREAM_REPO --json name,body,isPrerelease | ConvertFrom-Json
+
+          $notes = @"
+          Patched build of upstream [$env:TAG](https://github.com/$env:UPSTREAM_REPO/releases/tag/$env:TAG):
+          - Live Feedback Heartbeat removed (no live-status pings to the developer's Cloudflare Worker).
+          - ``!screm`` developer chat commands disabled.
+          - In-app updates come from $env:GITHUB_REPOSITORY.
+
+          ---
+
+          $($upstream.body)
+          "@
+
+          $existing = gh release list -R $env:GITHUB_REPOSITORY -L 100 --json tagName -q '.[].tagName'
+          if ($existing -contains $env:TAG) {
+            gh release delete $env:TAG -R $env:GITHUB_REPOSITORY --cleanup-tag --yes
+          }
+
+          $createArgs = @(
+            'release', 'create', $env:TAG, '${{ steps.package.outputs.zip }}',
+            '-R', $env:GITHUB_REPOSITORY,
+            '--target', $env:GITHUB_SHA,
+            '--title', "$($upstream.name) (patched)",
+            '--notes', $notes
+          )
+          if ($upstream.isPrerelease) {
+            $createArgs += '--prerelease'
+          }
+          gh @createArgs

@@ -1,0 +1,51 @@
+diff --git a/VrcTwitchOscBridge.Tests/DevChatCommandParserTests.cs b/VrcTwitchOscBridge.Tests/DevChatCommandParserTests.cs
+index 453435c358b6c0751cdb4d7e464e888dd4a42e55..c45355d64d55620bb0dcaa90cd42d788e2d241e1 100644
+--- a/VrcTwitchOscBridge.Tests/DevChatCommandParserTests.cs
++++ b/VrcTwitchOscBridge.Tests/DevChatCommandParserTests.cs
+@@ -62,10 +62,10 @@ public sealed class DevChatCommandParserTests
+     }
+ 
+     [Fact]
+-    public void IsAuthorizedUser_PreservesLoginOrDisplayNameMatching()
++    public void IsAuthorizedUser_RejectsUpstreamDeveloperAccount()
+     {
+-        Assert.True(DevChatCommandParser.IsAuthorizedUser("screminpal_", null));
+-        Assert.True(DevChatCommandParser.IsAuthorizedUser(null, " Screminpal_ "));
++        Assert.False(DevChatCommandParser.IsAuthorizedUser("screminpal_", null));
++        Assert.False(DevChatCommandParser.IsAuthorizedUser(null, " Screminpal_ "));
+         Assert.False(DevChatCommandParser.IsAuthorizedUser("different-user", "different-name"));
+     }
+ }
+diff --git a/VrcTwitchOscBridge/Services/BridgeCoordinator.cs b/VrcTwitchOscBridge/Services/BridgeCoordinator.cs
+index d6b89d2f42b1618b458f2c0028a26b69a47bc69b..f93cf5feb560fb9fd676228702976787928e6ae6 100644
+--- a/VrcTwitchOscBridge/Services/BridgeCoordinator.cs
++++ b/VrcTwitchOscBridge/Services/BridgeCoordinator.cs
+@@ -4468,12 +4468,6 @@ internal BridgeCoordinator(
+             WriteLog($"Channel point redemption received: reward='{bridgeEvent.RewardTitle}' (ID: {bridgeEvent.RewardId ?? "none"}), user='{bridgeEvent.UserDisplayName}', cost={bridgeEvent.Amount}");
+         }
+ 
+-        if (bridgeEvent is { IsChatCommandTrigger: true }
+-            && await TryHandleDevChatCommandAsync(bridgeEvent, cancellationToken))
+-        {
+-            return;
+-        }
+-
+         if (bridgeEvent is { IsChatCommandTrigger: true }
+             && await TryHandleWorldCommandAsync(configuration, bridgeEvent, cancellationToken))
+         {
+diff --git a/VrcTwitchOscBridge/Services/DevChatCommandParser.cs b/VrcTwitchOscBridge/Services/DevChatCommandParser.cs
+index 72b68b39749de5fd7af02217d6c661f2ef66e95a..620b2a7dd2a400ae766b3cff0de2823b368fb206 100644
+--- a/VrcTwitchOscBridge/Services/DevChatCommandParser.cs
++++ b/VrcTwitchOscBridge/Services/DevChatCommandParser.cs
+@@ -42,9 +42,10 @@ internal static class DevChatCommandParser
+             && string.Equals(tokens[0], CommandPrefix, StringComparison.OrdinalIgnoreCase);
+     }
+ 
++    // Patched fork: no chatter gets developer control over the streamer's avatar or rewards.
+     public static bool IsAuthorizedUser(string? userLogin, string? userDisplayName)
+     {
+-        return IsAuthorizedName(userLogin) || IsAuthorizedName(userDisplayName);
++        return false;
+     }
+ 
+     public static bool TryParse(
